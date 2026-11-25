@@ -1,0 +1,17 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+const page=readFileSync(new URL('../index.html',import.meta.url),'utf8');
+const source=page.match(/<script id="estimator-script">([\s\S]*?)<\/script>/)[1];
+const {makeDefault,quote,decode,encode}=runInNewContext(source+';({makeDefault,quote,decode,encode})',{URLSearchParams});
+const plain=x=>JSON.parse(JSON.stringify(x));
+test('synthetic goods, packaging and half-kilo rounding',()=>{const q=quote(makeDefault());assert.deepEqual(plain(q.packed),[.52,.72]);assert.deepEqual(plain(q.charged),[1,1]);assert.deepEqual(plain(q.amounts),[1655,1655]);});
+test('selection from both stages is included once',()=>{const s=makeDefault();s.qty[1][1]=1;const q=quote(s);assert.equal(q.count,3);assert.deepEqual(plain(q.amounts),[1655,1810]);});
+test('empty and oversized quotes have no price',()=>{const s=makeDefault();s.qty[0][0]=0;assert.equal(quote(s).state,'empty');s.qty[0][3]=50;assert.equal(quote(s).state,'over');assert.equal(quote(s).amounts,undefined)});
+test('volume dominates once, not added to physical weight',()=>{const s=makeDefault();s.dims=['40','30','25'];const q=quote(s);assert.equal(q.volume,6);assert.deepEqual(plain(q.charged),[6,6]);assert.deepEqual(plain(q.amounts),[3205,3205])});
+test('partial, invalid dimensions and unsupported precision block quote',()=>{for(const dims of [['40','','20'],['0','3','4'],['1','151','2'],['2.333','2','3']]){const s=makeDefault();s.dims=dims;assert.equal(quote(s).state,'wrong')}});
+test('20 kg boundary and next half-kilo',()=>{const s=makeDefault();s.dims=['50','50','40'];assert.equal(quote(s).state,'ok');s.dims[2]='40.01';assert.equal(quote(s).state,'over')});
+test('link round trip preserves both stages, box, language and route',()=>{const s=makeDefault();s.to='US';s.lang='en';s.tab=1;s.qty[1][2]=3;s.dims=['22.25','31','19'];const r=decode(encode(s));assert.deepEqual(plain(r.s),plain(s));assert.equal(quote(r.s).state,'ok')});
+test('bad version, out-of-stock counts, invalid route or extra payload reset',()=>{for(const hash of ['#v=9','#'+encode(makeDefault()).slice(1)+'&customer=10',encode(makeDefault()).replace('to=JP','to=XX'),encode(makeDefault()).replace('q=2%2C0%2C0%2C0%2C0','q=2%2C0%2C0%2C0%2C9')])assert.equal(decode(hash).bad,true)});
+test('all four demo routes return local-currency estimates',()=>{const s=makeDefault();for(const [to,n] of Object.entries({JP:1655,TW:265,HK:71,US:20})){s.to=to;assert.equal(quote(s).amounts[0],n)}});
